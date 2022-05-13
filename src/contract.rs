@@ -14,12 +14,15 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     env: Env,
     msg: InitMsg,
 ) -> StdResult<InitResponse> {
-    let state = Config {
+    let config = Config {
         owner: deps.api.canonical_address(&env.message.sender)?,
     };
 
     // Setup viewing key entropy
     let prng_seed: Vec<u8> = sha_256(base64::encode(msg.entropy).as_bytes()).to_vec();
+
+    // Save data to storage
+    save(&mut deps.storage, CONFIG_KEY, &config)?;
     save(&mut deps.storage, PRNG_SEED_KEY, &prng_seed)?;
     
 
