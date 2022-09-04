@@ -1,164 +1,108 @@
 use cosmwasm_std::{
-    debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier,
-    StdError, StdResult, Storage, HandleResult, ReadonlyStorage, CanonicalAddr,
+    entry_point, to_binary, Addr, Api, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError,
+    Storage,
 };
-use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 
-use crate::msg::{HandleMsg, HandleAnswer, InitMsg, QueryMsg, QueryAnswer};
-use crate::rand::sha_256;
-use crate::state::{save, load, may_load, remove, Config, CONFIG_KEY, PREFIX_VIEW_KEY, PRNG_SEED_KEY};
-use crate::viewing_key::{ViewingKey, VIEWING_KEY_SIZE};
+use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 
-pub fn init<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+use crate::error::ContractError;
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg};
+use crate::state::{Config, CONFIG_KEY};
+
+#[entry_point]
+pub fn instantiate(
+    deps: DepsMut,
     env: Env,
-    msg: InitMsg,
-) -> StdResult<InitResponse> {
-    let config = Config {
-        owner: deps.api.canonical_address(&env.message.sender)?,
-    };
-
-    // Setup viewing key entropy
-    let prng_seed: Vec<u8> = sha_256(base64::encode(msg.entropy).as_bytes()).to_vec();
+    info: MessageInfo,
+    msg: InstantiateMsg,
+) -> Result<Response, ContractError> {
+    let config = Config { owner: info.sender };
 
     // Save data to storage
-    save(&mut deps.storage, CONFIG_KEY, &config)?;
-    save(&mut deps.storage, PRNG_SEED_KEY, &prng_seed)?;
-    
+    CONFIG_KEY.save(deps.storage, &config)?;
 
-    Ok(InitResponse::default())
+    Ok(Response::new())
 }
-
-
 
 //-------------------------------------------- HANDLES ---------------------------------
 
-
-
-pub fn handle<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+#[entry_point]
+pub fn execute(
+    deps: DepsMut,
     env: Env,
-    msg: HandleMsg,
-) -> StdResult<HandleResponse> {
+    info: MessageInfo,
+    msg: ExecuteMsg,
+) -> Result<Response, ContractError> {
     match msg {
-        HandleMsg::HandleEx {} => handle_ex(deps, env),
+        ExecuteMsg::CreateViewingKey { entropy } => try_create_key(deps, env, info, entropy),
+        ExecuteMsg::SetViewingKey { key, .. } => try_set_key(deps, info, &key),
     }
 }
 
-
-
-/// Returns HandleResult
+/// Returns Result<Response, ContractError>
 ///
-/// Placeholder handle
+/// create a viewing key
 ///
 /// # Arguments
 ///
-/// * `deps` - mutable reference to Extern containing all the contract's external dependencies
-/// * `env` - Env of contract's environment
-pub fn handle_ex<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    _env: Env,
-) -> HandleResult {
-    
-
-    Ok(HandleResponse {
-        messages: vec![],
-        log: vec![],
-        data: Some(to_binary(&HandleAnswer::HandleExAns {
-        })?),
-    })
-}
-
-
-
-
-/// Returns HandleResult
-///
-/// creates a viewing key
-///
-/// # Arguments
-///
-/// * `deps` - mutable reference to Extern containing all the contract's external dependencies
-/// * `env` - Env of contract's environment
-/// * `config` - a reference to the Config
-/// * `priority` - u8 representation of highest ContractStatus level this action is permitted
-/// * `entropy` - string slice of the input String to be used as entropy in randomization
-pub fn create_key<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+/// * `deps`    - DepsMut containing all the contract's external dependencies
+/// * `env`     - Env of contract's environment
+/// * `info`    - Carries the info of who sent the message and how much native funds were sent along
+/// * `entropy` - string to be used as an entropy source for randomization
+fn try_create_key(
+    deps: DepsMut,
     env: Env,
-    entropy: &str,
-) -> HandleResult {
-    let prng_seed: Vec<u8> = load(&deps.storage, PRNG_SEED_KEY)?;
-    let key = ViewingKey::new(&env, &prng_seed, entropy.as_ref());
-    let message_sender = deps.api.canonical_address(&env.message.sender)?;
-    let mut key_store = PrefixedStorage::new(PREFIX_VIEW_KEY, &mut deps.storage);
-    save(&mut key_store, message_sender.as_slice(), &key.to_hashed())?;
-    Ok(HandleResponse {
-        messages: vec![],
-        log: vec![],
-        data: Some(to_binary(&HandleAnswer::ViewingKey {
-            key: format!("{}", key),
-        })?),
-    })
+    info: MessageInfo,
+    entropy: String,
+) -> Result<Response, ContractError> {
+    let key = ViewingKey::create(
+        deps.storage,
+        &info,
+        &env,
+        info.sender.as_str(),
+        entropy.as_bytes(),
+    );
+
+    Ok(Response::new().add_attribute("viewing_key", key))
 }
 
+/// Returns Result<Response, ContractError>
+///
+/// sets the viewing key
+///
+/// # Arguments
+///
+/// * `deps` - DepsMut containing all the contract's external dependencies
+/// * `info` - Carries the info of who sent the message and how much native funds were sent along
+/// * `key`  - string slice to be used as the viewing key
+fn try_set_key(deps: DepsMut, info: MessageInfo, key: &str) -> Result<Response, ContractError> {
+    ViewingKey::set(deps.storage, info.sender.as_str(), key);
 
-
-
-
-
-
-
+    Ok(Response::new().add_attribute("viewing_key", key))
+}
 
 // ---------------------------------------- QUERIES --------------------------------------
 
-
-pub fn query<S: Storage, A: Api, Q: Querier>(
-    deps: &Extern<S, A, Q>,
-    msg: QueryMsg,
-) -> StdResult<Binary> {
+#[entry_point]
+pub fn query(deps: Deps, msg: QueryMsg) -> Result<Binary, ContractError> {
     match msg {
-        QueryMsg::QueryEx {} => to_binary(&query_ex(deps)?),
+        QueryMsg::QueryEx {} => query_ex(deps),
     }
 }
 
-fn query_ex<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>) -> StdResult<QueryAnswer> {
-
-
-    Ok(QueryAnswer::QueryExAns {  })
+fn query_ex(deps: Deps) -> Result<Binary, ContractError> {
+    Ok(to_binary(&QueryAnswer::QueryExAns {})?)
 }
 
+//----------------------------------------- Helper functions----------------------------------
 
-
-
-// --------------------------------------- HELPER FUNCTIONS ----------------------------------
-
-
-
-
-/// Returns StdResult<bool> result of validating an address' viewing key
+/// Returns bool result of validating an address' viewing key
 ///
 /// # Arguments
 ///
-/// * `storage` - a reference to the contract's storage
-/// * `address` - a reference to the address whose key should be validated
+/// * `storage`     - a reference to the contract's storage
+/// * `account`     - a reference to the str whose key should be validated
 /// * `viewing_key` - String key used for authentication
-fn check_key<S: ReadonlyStorage>(
-    storage: &S,
-    address: &CanonicalAddr,
-    viewing_key: String,
-) -> StdResult<()> {
-    // load the address' key
-    let read_key = ReadonlyPrefixedStorage::new(PREFIX_VIEW_KEY, storage);
-    let load_key: [u8; VIEWING_KEY_SIZE] =
-        may_load(&read_key, address.as_slice())?.unwrap_or_else(|| [0u8; VIEWING_KEY_SIZE]);
-    let input_key = ViewingKey(viewing_key);
-    // if key matches
-    if input_key.check_viewing_key(&load_key) {
-        return Ok(());
-    }
-    Err(StdError::generic_err(
-        "Wrong viewing key for this address or viewing key not set",
-    ))
+fn is_key_valid(storage: &dyn Storage, account: &str, viewing_key: String) -> bool {
+    ViewingKey::check(storage, account, &viewing_key).is_ok()
 }
-
