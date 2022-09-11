@@ -1,13 +1,13 @@
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, Api, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError,
-    Storage,
+    entry_point, to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, Storage,
 };
 
+use secret_toolkit::permit::{validate, Permit, TokenPermissions};
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg};
-use crate::state::{Config, CONFIG_KEY};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit};
+use crate::state::{Config, CONFIG_KEY, PREFIX_REVOKED_PERMITS};
 
 #[entry_point]
 pub fn instantiate(
@@ -16,7 +16,10 @@ pub fn instantiate(
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    let config = Config { owner: info.sender };
+    let config = Config {
+        owner: info.sender,
+        contract_address: env.contract.address,
+    };
 
     // Save data to storage
     CONFIG_KEY.save(deps.storage, &config)?;
@@ -87,10 +90,67 @@ fn try_set_key(deps: DepsMut, info: MessageInfo, key: &str) -> Result<Response, 
 pub fn query(deps: Deps, msg: QueryMsg) -> Result<Binary, ContractError> {
     match msg {
         QueryMsg::QueryEx {} => query_ex(deps),
+        QueryMsg::WithPermit { permit, query } => permit_queries(deps, permit, query),
+        _ => viewing_keys_queries(deps, msg),
+    }
+}
+
+/// Returns QueryResult from validating a permit and then using its creator's address when
+/// performing the specified query
+///
+/// # Arguments
+///
+/// * `deps` - a reference to Extern containing all the contract's external dependencies
+/// * `permit` - the permit used to authentic the query
+/// * `query` - the query to perform
+fn permit_queries(
+    deps: Deps,
+    permit: Permit,
+    query: QueryWithPermit,
+) -> Result<Binary, ContractError> {
+    // Validate permit content
+    let config = CONFIG_KEY.load(deps.storage)?;
+
+    let viewer = validate(
+        deps,
+        PREFIX_REVOKED_PERMITS.load(deps.storage).unwrap().as_str(),
+        &permit,
+        config.contract_address.to_string(),
+        None,
+    )?;
+
+    // Permit validated! We can now execute the query.
+    match query {
+        QueryWithPermit::Permissioned {} => {
+            if !permit.check_permission(&TokenPermissions::Balance) {
+                return Err(ContractError::Unauthorized {});
+            }
+
+            query_permissioned(deps, viewer)
+        }
+    }
+}
+
+pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> Result<Binary, ContractError> {
+    let (address, key) = msg.get_validation_params();
+
+    if !is_key_valid(deps.storage, &address, key) {
+        return Err(ContractError::Unauthorized {});
+    } else {
+        return match msg {
+            // Base
+            QueryMsg::Permissioned { viewer, key: _ } => query_permissioned(deps, viewer),
+
+            _ => panic!("This query type does not require authentication"),
+        };
     }
 }
 
 fn query_ex(deps: Deps) -> Result<Binary, ContractError> {
+    Ok(to_binary(&QueryAnswer::QueryExAns {})?)
+}
+
+fn query_permissioned(deps: Deps, viewer: String) -> Result<Binary, ContractError> {
     Ok(to_binary(&QueryAnswer::QueryExAns {})?)
 }
 
