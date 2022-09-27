@@ -2,7 +2,7 @@ use cosmwasm_std::{
     entry_point, to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, Storage,
 };
 
-use secret_toolkit::permit::{validate, Permit, TokenPermissions};
+use secret_toolkit::permit::{validate, Permit, RevokedPermits, TokenPermissions};
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 
 use crate::error::ContractError;
@@ -84,6 +84,22 @@ fn try_set_key(deps: DepsMut, info: MessageInfo, key: &str) -> Result<Response, 
     Ok(Response::new().add_attribute("viewing_key", key))
 }
 
+fn revoke_permit(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    permit_name: String,
+) -> Result<Response, ContractError> {
+    RevokedPermits::revoke_permit(
+        deps.storage,
+        PREFIX_REVOKED_PERMITS,
+        info.sender.as_ref(),
+        &permit_name,
+    );
+
+    Ok(Response::new())
+}
+
 // ---------------------------------------- QUERIES --------------------------------------
 
 #[entry_point]
@@ -113,7 +129,7 @@ fn permit_queries(
 
     let viewer = validate(
         deps,
-        PREFIX_REVOKED_PERMITS.load(deps.storage).unwrap().as_str(),
+        PREFIX_REVOKED_PERMITS,
         &permit,
         config.contract_address.to_string(),
         None,
@@ -135,14 +151,14 @@ pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> Result<Binary, Contrac
     let (address, key) = msg.get_validation_params();
 
     if !is_key_valid(deps.storage, &address, key) {
-        return Err(ContractError::Unauthorized {});
+        Err(ContractError::Unauthorized {})
     } else {
-        return match msg {
+        match msg {
             // Base
             QueryMsg::Permissioned { viewer, key: _ } => query_permissioned(deps, viewer),
 
             _ => panic!("This query type does not require authentication"),
-        };
+        }
     }
 }
 

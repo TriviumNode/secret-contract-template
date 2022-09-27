@@ -8,7 +8,7 @@ use cosmwasm_std::Addr;
 /// Basic configuration struct
 pub static CONFIG_KEY: Item<Config> = Item::new(b"config");
 /// Revoked permits prefix key
-pub static PREFIX_REVOKED_PERMITS: Item<String> = Item::new(b"revoked");
+pub const PREFIX_REVOKED_PERMITS: &str = "revoked_permits";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Config {
