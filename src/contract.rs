@@ -3,18 +3,19 @@ use cosmwasm_std::{
 };
 
 use secret_toolkit::permit::{validate, Permit, RevokedPermits, TokenPermissions};
+use secret_toolkit::utils::{pad_handle_result, pad_query_result};
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit};
-use crate::state::{Config, CONFIG_KEY, PREFIX_REVOKED_PERMITS};
+use crate::state::{Config, BLOCK_SIZE, CONFIG_KEY, PREFIX_REVOKED_PERMITS};
 
 #[entry_point]
 pub fn instantiate(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
-    msg: InstantiateMsg,
+    _msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     let config = Config {
         owner: info.sender,
@@ -36,10 +37,13 @@ pub fn execute(
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
-    match msg {
+    let res = match msg {
         ExecuteMsg::CreateViewingKey { entropy } => try_create_key(deps, env, info, entropy),
         ExecuteMsg::SetViewingKey { key, .. } => try_set_key(deps, info, &key),
-    }
+        ExecuteMsg::RevokePermit { permit_name, .. } => revoke_permit(deps, env, info, permit_name),
+    };
+
+    pad_handle_result(res, BLOCK_SIZE)
 }
 
 /// Returns Result<Response, ContractError>
@@ -86,7 +90,7 @@ fn try_set_key(deps: DepsMut, info: MessageInfo, key: &str) -> Result<Response, 
 
 fn revoke_permit(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     info: MessageInfo,
     permit_name: String,
 ) -> Result<Response, ContractError> {
@@ -103,12 +107,13 @@ fn revoke_permit(
 // ---------------------------------------- QUERIES --------------------------------------
 
 #[entry_point]
-pub fn query(deps: Deps, msg: QueryMsg) -> Result<Binary, ContractError> {
-    match msg {
+pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> Result<Binary, ContractError> {
+    let res = match msg {
         QueryMsg::QueryEx {} => query_ex(deps),
         QueryMsg::WithPermit { permit, query } => permit_queries(deps, permit, query),
         _ => viewing_keys_queries(deps, msg),
-    }
+    };
+    pad_query_result(res, BLOCK_SIZE)
 }
 
 /// Returns QueryResult from validating a permit and then using its creator's address when
@@ -162,11 +167,11 @@ pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> Result<Binary, Contrac
     }
 }
 
-fn query_ex(deps: Deps) -> Result<Binary, ContractError> {
+fn query_ex(_deps: Deps) -> Result<Binary, ContractError> {
     Ok(to_binary(&QueryAnswer::QueryExAns {})?)
 }
 
-fn query_permissioned(deps: Deps, viewer: String) -> Result<Binary, ContractError> {
+fn query_permissioned(_deps: Deps, _viewer: String) -> Result<Binary, ContractError> {
     Ok(to_binary(&QueryAnswer::QueryExAns {})?)
 }
 
